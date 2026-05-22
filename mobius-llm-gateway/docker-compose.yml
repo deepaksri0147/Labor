@@ -1,0 +1,110 @@
+version: "3.9"
+
+services:
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"     # broker
+      - "15672:15672"   # management UI  →  http://localhost:15672  (llm / llm123)
+    environment:
+      RABBITMQ_DEFAULT_USER: llm
+      RABBITMQ_DEFAULT_PASS: llm123
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: llm-gateway-api
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://llm:llm123@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  ollama-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ollama-worker
+    command: celery -A app.celery_app worker -Q ollama -c 2 --loglevel=info -n ollama@%h
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://llm:llm123@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  vllm-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: vllm-worker
+    command: celery -A app.celery_app worker -Q vllm -c 5 --loglevel=info -n vllm@%h
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://llm:llm123@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  lorax-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: lorax-worker
+    command: celery -A app.celery_app worker -Q lorax -c 5 --loglevel=info -n lorax@%h
+    env_file: .env
+    environment:
+      RABBITMQ_URL: amqp://llm:llm123@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  flower:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: flower
+    command: >
+      celery -A app.celery_app flower
+      --port=5555
+      --broker=amqp://llm:llm123@rabbitmq:5672//
+      --broker_api=http://llm:llm123@rabbitmq:15672/api/
+    ports:
+      - "5555:5555"     # Flower UI  →  http://localhost:5555
+    depends_on:
+      - rabbitmq
+      - redis

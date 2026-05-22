@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ name }}
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+    spec:
+      initContainers:
+      - name: download-model
+        image: python:3.9-slim
+        command: ["sh", "-c"]
+        args:
+        - |
+          pip install --no-cache-dir huggingface_hub
+          python -c "
+          import os
+          from huggingface_hub import hf_hub_download, list_repo_files
+          
+          repo_id = '{{ model_id }}'
+          local_dir = '/models'
+          
+          try:
+              print(f'Listing files in {repo_id}...')
+              files = list_repo_files(repo_id=repo_id)
+              onnx_files = [f for f in files if f.endswith('.onnx')]
+              
+              if not onnx_files:
+                  print(f'❌ Error: No .onnx files found in {repo_id}')
+                  exit(1)
+              
+              target_file = onnx_files[0]
+              print(f'Found {target_file}. Downloading...')
+              
+              # Download
+              path = hf_hub_download(repo_id=repo_id, filename=target_file, local_dir=local_dir)
+              
+              # Move to top-level model.onnx
+              dest = os.path.join(local_dir, 'model.onnx')
+              if path != dest:
+                  print(f'Moving {path} to {dest}')
+                  os.rename(path, dest)
+                  
+              # Ensure readable by everyone
+              os.chmod(dest, 0o777)
+              print(f'✅ Successfully prepared {dest}')
+              os.system('ls -la /models')
+          except Exception as e:
+              print(f'❌ Download failed: {e}')
+              exit(1)
+          "
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: token
+        volumeMounts:
+        - name: model-volume
+          mountPath: /models
+      containers:
+      - name: {{ name }}
+        image: {{ image }}
+        args:
+        - "--model_path"
+        - "/models/model.onnx"
+        - "--http_port"
+        - "80"
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: model-volume
+          mountPath: /models
+        resources:
+          requests:
+            cpu: "{{ cpu_request }}"
+            memory: "{{ memory_request }}"
+          limits:
+            cpu: "{{ cpu_limit }}"
+            memory: "{{ memory_limit }}"
+      volumes:
+      - name: model-volume
+        emptyDir: {}

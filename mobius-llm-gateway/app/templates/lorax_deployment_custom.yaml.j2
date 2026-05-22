@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ name }}
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+    spec:
+      containers:
+      - name: {{ name }}
+        image: {{ image }}
+        imagePullPolicy: IfNotPresent
+        args:
+        - --model-id
+        - {{ model_id }}
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: token
+        ports:
+        - containerPort: {{ container_port | default(80) }}
+          name: http
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "{{ cpu_request }}"
+            memory: {{ memory_request }}
+            nvidia.com/gpu: "{{ gpu_request }}"
+          limits:
+            cpu: "{{ cpu_limit }}"
+            memory: {{ memory_limit }}
+            nvidia.com/gpu: "{{ gpu_limit }}"
+      restartPolicy: Always
+      serviceAccountName: default
+      tolerations:
+      - key: node.kubernetes.io/not-ready
+        operator: Exists
+        effect: NoExecute
+        tolerationSeconds: 300
+      - key: node.kubernetes.io/unreachable
+        operator: Exists
+        effect: NoExecute
+        tolerationSeconds: 300
+
+

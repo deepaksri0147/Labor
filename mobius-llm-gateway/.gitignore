@@ -1,0 +1,25 @@
+**/llm_gate_env/*
+/__pycache__/
+**/.gitignore/*
+myenv
+
+# Python cache and virtual environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.venv
+*venv
+
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDEs
+.vscode/
+.idea/

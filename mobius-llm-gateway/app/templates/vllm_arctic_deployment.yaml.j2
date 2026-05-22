@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+    model: {{ model_id | replace('/', '-') }}
+    inference-plugin: arctic
+
+spec:
+  replicas: {{ replicas | default(1) }}
+  selector:
+    matchLabels:
+      app: {{ name }}
+
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+        model: {{ model_id | replace('/', '-') }}
+        inference-plugin: arctic
+
+    spec:
+      restartPolicy: Always
+{% if runtime_class is defined %}
+      runtimeClassName: {{ runtime_class }}
+{% endif %}
+
+      containers:
+        - name: vllm-arctic
+          image: {{ image }}
+          imagePullPolicy: IfNotPresent
+
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export ARCTIC_INFERENCE_ENABLED=1
+
+              VLLM_ARGS="--host 0.0.0.0 --port {{ container_port | default(8000) }}"
+{% if trust_remote_code | default(true) %}
+              VLLM_ARGS="$VLLM_ARGS --trust-remote-code"
+{% endif %}
+{% if enable_chunked_prefill %}
+              VLLM_ARGS="$VLLM_ARGS --enable-chunked-prefill"
+{% endif %}
+{% if async_scheduling %}
+              VLLM_ARGS="$VLLM_ARGS --async-scheduling"
+{% endif %}
+{% if tensor_parallel_size is defined and tensor_parallel_size %}
+              VLLM_ARGS="$VLLM_ARGS --tensor-parallel-size {{ tensor_parallel_size }}"
+{% endif %}
+{% if gpu_memory_utilization is defined and gpu_memory_utilization %}
+              VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization {{ gpu_memory_utilization }}"
+{% else %}
+              VLLM_ARGS="$VLLM_ARGS --gpu-memory-utilization 0.92"
+{% endif %}
+{% if max_num_batched_tokens is defined and max_num_batched_tokens %}
+              VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens {{ max_num_batched_tokens }}"
+{% else %}
+              VLLM_ARGS="$VLLM_ARGS --max-num-batched-tokens 16384"
+{% endif %}
+{% if max_num_seqs is defined and max_num_seqs %}
+              VLLM_ARGS="$VLLM_ARGS --max-num-seqs {{ max_num_seqs }}"
+{% else %}
+              VLLM_ARGS="$VLLM_ARGS --max-num-seqs 64"
+{% endif %}
+{% if enable_prefix_caching | default(true) %}
+              VLLM_ARGS="$VLLM_ARGS --enable-prefix-caching"
+{% endif %}
+{% if enable_auto_tool_choice | default(true) %}
+              VLLM_ARGS="$VLLM_ARGS --enable-auto-tool-choice"
+{% endif %}
+{% if tool_call_parser is defined and tool_call_parser %}
+              VLLM_ARGS="$VLLM_ARGS --tool-call-parser {{ tool_call_parser }}"
+{% else %}
+              VLLM_ARGS="$VLLM_ARGS --tool-call-parser openai"
+{% endif %}
+
+{% if ulysses_sequence_parallel_size is defined and ulysses_sequence_parallel_size %}
+              VLLM_ARGS="$VLLM_ARGS --ulysses-sequence-parallel-size {{ ulysses_sequence_parallel_size }}"
+{% endif %}
+{% if speculative_method is defined and speculative_method == 'arctic' %}
+              VLLM_ARGS="$VLLM_ARGS --speculative-config '{\"method\": \"arctic\", \"model\": \"{{ speculator_model }}\", \"num_speculative_tokens\": {{ num_speculative_tokens | default(3) }}, \"disable_by_batch_size\": {{ disable_by_batch_size | default(32) }}}'"
+{% elif speculative_method in ['suffix_decoding', 'ngram'] %}
+              VLLM_ARGS="$VLLM_ARGS --speculative-config '{\"method\": \"{{ speculative_method }}\", \"num_speculative_tokens\": {{ num_speculative_tokens | default(5) }}}'"
+{% elif speculator_model is defined and speculator_model %}
+              VLLM_ARGS="$VLLM_ARGS --speculative-model {{ speculator_model }} --num-speculative-tokens {{ num_speculative_tokens | default(5) }}"
+{% endif %}
+
+              exec vllm serve {{ model_id }} $VLLM_ARGS
+
+          env:
+{% if vllm_plugins is defined and vllm_plugins %}
+            - name: VLLM_PLUGINS
+              value: "{{ vllm_plugins }}"
+{% endif %}
+{% if vllm_device is defined and vllm_device %}
+            - name: VLLM_DEVICE
+              value: "{{ vllm_device }}"
+{% endif %}
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ hf_token_secret_name | default('hf-secret') }}
+                  key: token
+
+          ports:
+            - containerPort: {{ container_port | default(8000) }}
+              protocol: TCP
+
+          resources:
+            requests:
+              cpu: "{{ cpu_request | default('4') }}"
+              memory: "{{ memory_request | default('16Gi') }}"
+{% if gpu_request is defined and gpu_request and gpu_request != '0' %}
+              nvidia.com/gpu: "{{ gpu_request }}"
+{% endif %}
+            limits:
+              cpu: "{{ cpu_limit | default('12') }}"
+              memory: "{{ memory_limit | default('48Gi') }}"
+{% if gpu_limit is defined and gpu_limit and gpu_limit != '0' %}
+              nvidia.com/gpu: "{{ gpu_limit }}"
+{% endif %}
+
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: shm
+              mountPath: /dev/shm
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: {{ container_port | default(8000) }}
+            failureThreshold: 60
+            periodSeconds: 20
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ container_port | default(8000) }}
+            initialDelaySeconds: 120
+            periodSeconds: 15
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ container_port | default(8000) }}
+            initialDelaySeconds: 120
+            periodSeconds: 10
+
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: {{ pvc_name | default('vllm-model-cache') }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 8Gi

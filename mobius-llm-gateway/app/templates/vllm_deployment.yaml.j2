@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ name }}
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+    spec:
+      restartPolicy: Always
+
+{% if runtime_class is defined %}
+      runtimeClassName: {{ runtime_class }}
+{% endif %}
+
+      containers:
+        - name: vllm
+          image: {{ image }}
+          imagePullPolicy: IfNotPresent
+
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              vllm serve {{ model_id }} \
+                --host 0.0.0.0 \
+                --port {{ container_port | default(8000) }} \
+{% if trust_remote_code | default(true) %}
+                --trust-remote-code \
+{% endif %}
+{% if enable_chunked_prefill is defined and enable_chunked_prefill %}
+                --enable-chunked-prefill \
+{% endif %}
+{% if max_num_batched_tokens is defined %}
+                --max-num-batched-tokens {{ max_num_batched_tokens }} \
+{% endif %}
+{% if async_scheduling is defined and async_scheduling %}
+                --async-scheduling \
+{% endif %}
+{% if gpu_memory_utilization is defined %}
+                --gpu-memory-utilization {{ gpu_memory_utilization }} \
+{% endif %}
+{% if tensor_parallel_size is defined %}
+                --tensor-parallel-size {{ tensor_parallel_size }} \
+{% endif %}
+                --served-model-name {{ model_id }}
+
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-secret
+                  key: token
+
+          ports:
+            - containerPort: {{ container_port | default(8000) }}
+              protocol: TCP
+
+          resources:
+            requests:
+              cpu: "{{ cpu_request }}"
+              memory: "{{ memory_request }}"
+{% if gpu_request | int > 0 %}
+              nvidia.com/gpu: "{{ gpu_request }}"
+{% endif %}
+            limits:
+              cpu: "{{ cpu_limit }}"
+              memory: "{{ memory_limit }}"
+{% if gpu_limit | int > 0 %}
+              nvidia.com/gpu: "{{ gpu_limit }}"
+{% endif %}
+
+{% if enable_probes is defined and enable_probes %}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ container_port | default(8000) }}
+            initialDelaySeconds: {{ probe_initial_delay | default(90) }}
+            periodSeconds: {{ liveness_period | default(15) }}
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ container_port | default(8000) }}
+            initialDelaySeconds: {{ probe_initial_delay | default(90) }}
+            periodSeconds: {{ readiness_period | default(10) }}
+{% endif %}

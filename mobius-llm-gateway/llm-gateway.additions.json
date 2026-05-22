@@ -1,0 +1,2456 @@
+{
+  "_fragment": "llm-gateway",
+  "_target_spec": "llm-gateway-openapi.json (Mobius LLM Gateway 1.0.0)",
+  "_instructions": "Merge paths into .paths and schemas into .components.schemas. Apply MODIFY items to existing schemas as field additions (do not remove existing fields). All new request/response bodies are application/json.",
+  "_MODIFY_existing_schemas": {
+    "Usage": {
+      "_change": "ADD three fields to the existing Usage schema. Existing fields (prompt_tokens, completion_tokens, total_tokens) are UNCHANGED.",
+      "add_properties": {
+        "cache_read_tokens": {
+          "type": "integer",
+          "default": 0,
+          "description": "Input tokens served from a cache prefix at the cached rate."
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "default": 0,
+          "description": "Input tokens written to a cache prefix on first use (full rate)."
+        },
+        "rate_class": {
+          "type": "string",
+          "enum": [
+            "sync",
+            "batch"
+          ],
+          "description": "Whether the call was billed at synchronous or batch rate."
+        }
+      }
+    },
+    "CostRequest": {
+      "_change": "ADD optional pre-flight estimation fields. Existing required fields (agent_id, tenant_id) are UNCHANGED.",
+      "add_properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "actual",
+            "estimate"
+          ],
+          "default": "actual",
+          "description": "actual = post-hoc cost of completed work; estimate = pre-flight projection for a planned call or batch."
+        },
+        "estimated_input_tokens": {
+          "type": "integer",
+          "description": "Required when mode=estimate."
+        },
+        "estimated_output_tokens": {
+          "type": "integer",
+          "description": "Required when mode=estimate."
+        },
+        "cache_prefix_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Cache prefixes the planned call(s) will reference; cached tokens are priced at the cached rate in the estimate."
+        },
+        "item_count": {
+          "type": "integer",
+          "default": 1,
+          "description": "Number of items when estimating a batch."
+        }
+      }
+    }
+  },
+  "paths": {
+    "/labor/calls": {
+      "post": {
+        "summary": "Submit one typed labor call (sync if small, async otherwise)",
+        "operationId": "submitLaborCall",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaborCallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Completed (sync) or accepted (async)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborCallResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Budget reservation failed (see ExecutorPolicy / pre-flight estimate)"
+          },
+          "409": {
+            "description": "Idempotency key replay returns the original LaborCallResponse"
+          },
+          "422": {
+            "description": "Envelope or schema validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/calls/{labor_call_id}": {
+      "get": {
+        "summary": "Get a labor call result / status",
+        "operationId": "getLaborCall",
+        "parameters": [
+          {
+            "name": "labor_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborCallResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/calls/{labor_call_id}/validate": {
+      "post": {
+        "summary": "Validate a parsed output against a declared schema",
+        "operationId": "validateLaborOutput",
+        "parameters": [
+          {
+            "name": "labor_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/calls/{labor_call_id}/repair": {
+      "post": {
+        "summary": "Repair an invalid output using its validation result",
+        "operationId": "repairLaborOutput",
+        "parameters": [
+          {
+            "name": "labor_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborCallResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/calls/{labor_call_id}/revalidate": {
+      "post": {
+        "summary": "Re-validate a repaired output",
+        "operationId": "revalidateLaborOutput",
+        "parameters": [
+          {
+            "name": "labor_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/batch": {
+      "post": {
+        "summary": "Submit N labor calls as one batch",
+        "operationId": "submitLaborBatch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaborBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborBatchResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Pre-flight budget reservation failed for the batch"
+          },
+          "409": {
+            "description": "Idempotency key replay returns the original LaborBatchResponse"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/batch/{batch_id}": {
+      "get": {
+        "summary": "Batch status: counts by JobState and cost-so-far",
+        "operationId": "getLaborBatch",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborBatchResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/batch/{batch_id}/items": {
+      "get": {
+        "summary": "Per-item state and per-item artifact refs",
+        "operationId": "getLaborBatchItems",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/JobState"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LaborBatchItemResult"
+                      }
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "page_size": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/batch/{batch_id}/cancel": {
+      "post": {
+        "summary": "Cancel a running batch",
+        "operationId": "cancelLaborBatch",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "preserve_completed_items": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborBatchResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/cache-prefix": {
+      "post": {
+        "summary": "Register a reusable, TTL-bounded context prefix",
+        "operationId": "createCachePrefix",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CachePrefixCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CachePrefix"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/cache-prefix/{cache_prefix_id}": {
+      "get": {
+        "summary": "Cache prefix TTL, token count, and hit statistics",
+        "operationId": "getCachePrefix",
+        "parameters": [
+          {
+            "name": "cache_prefix_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CachePrefix"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/ux-state": {
+      "get": {
+        "summary": "UI-facing snapshot of a labor job",
+        "operationId": "getLaborJobUxState",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJobUxState"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/events": {
+      "get": {
+        "summary": "SSE stream (text/event-stream) or event list for one job",
+        "operationId": "getLaborJobEvents",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after_event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Replay cursor."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of JobEvent objects",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobEvent"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobEvent"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/executor-policies": {
+      "post": {
+        "summary": "Create an executor-routing + budget policy",
+        "operationId": "createExecutorPolicy",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutorPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutorPolicy"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/executors": {
+      "get": {
+        "summary": "List registered executors (the pluggable-backend registry)",
+        "operationId": "listExecutors",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "executors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExecutorDescriptor"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}": {
+      "get": {
+        "summary": "Get canonical labor job status",
+        "operationId": "getLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/cancel": {
+      "post": {
+        "summary": "Cancel one async labor job",
+        "operationId": "cancelLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobCancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/retry": {
+      "post": {
+        "summary": "Retry a labor job",
+        "operationId": "retryLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobRetryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/fork": {
+      "post": {
+        "summary": "Fork a labor job with overrides",
+        "operationId": "forkLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobForkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/pause": {
+      "post": {
+        "summary": "Pause a labor job",
+        "operationId": "pauseLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/resume": {
+      "post": {
+        "summary": "Resume a paused labor job",
+        "operationId": "resumeLaborJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaborJob"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/artifacts": {
+      "get": {
+        "summary": "Get raw/parsed/validated/repair outputs for a labor job",
+        "operationId": "getLaborJobArtifacts",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id": {
+                      "type": "string"
+                    },
+                    "artifacts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ArtifactRef"
+                      }
+                    },
+                    "output_refs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ArtifactRef"
+                      }
+                    },
+                    "validation_result_refs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ArtifactRef"
+                      }
+                    },
+                    "repair_result_refs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ArtifactRef"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/lineage": {
+      "get": {
+        "summary": "Get lineage for a labor job",
+        "operationId": "getLaborJobLineage",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id": {
+                      "type": "string"
+                    },
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LineageEdge"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/labor/jobs/{job_id}/emit-event": {
+      "post": {
+        "summary": "Append a job event (REST equivalent of gRPC PublishExecutionEvent)",
+        "operationId": "emitLaborJobEvent",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "event_id": {
+                      "type": "string"
+                    },
+                    "event_sequence": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-policies": {
+      "post": {
+        "summary": "Create a model-governance policy (which models are allowed for which data classes)",
+        "operationId": "createModelPolicy",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPolicy"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-policies/{model_policy_id}": {
+      "get": {
+        "summary": "Get a model policy",
+        "operationId": "getModelPolicy",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "model_policy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPolicy"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "RequestEnvelope": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "trace_context"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "initiator_id": {
+            "type": "string"
+          },
+          "initiator_type": {
+            "type": "string",
+            "enum": [
+              "TENANT",
+              "SYSTEM",
+              "AGENT"
+            ]
+          },
+          "cost_center_id": {
+            "type": "string"
+          },
+          "policy_scope_id": {
+            "type": "string",
+            "description": "Opaque consumer policy id; stored and echoed, never interpreted."
+          },
+          "data_classification": {
+            "type": "string",
+            "description": "Consumer-supplied classification tag; travels with every produced ArtifactRef."
+          },
+          "trace_context": {
+            "type": "object",
+            "required": [
+              "traceparent"
+            ],
+            "properties": {
+              "traceparent": {
+                "type": "string"
+              },
+              "tracestate": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ArtifactRef": {
+        "type": "object",
+        "required": [
+          "artifact_ref_id",
+          "artifact_type",
+          "storage_system",
+          "version",
+          "tenant_id"
+        ],
+        "properties": {
+          "artifact_ref_id": {
+            "type": "string"
+          },
+          "artifact_type": {
+            "type": "string"
+          },
+          "storage_system": {
+            "type": "string",
+            "enum": [
+              "GATEWAY",
+              "DITA",
+              "PI",
+              "CONTENT",
+              "OBJECT_STORE",
+              "ORCHESTRATION",
+              "EXTERNAL"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "data_classification": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "JobState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "scheduled",
+          "running",
+          "waiting_for_dependency",
+          "waiting_for_review",
+          "validating",
+          "repairing",
+          "paused",
+          "retrying",
+          "partially_completed",
+          "succeeded",
+          "failed",
+          "cancelled",
+          "timed_out",
+          "rolled_back",
+          "archived"
+        ]
+      },
+      "ExecutionTarget": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "executor",
+              "auto"
+            ],
+            "description": "executor = route to a named executor id; auto = let the executor policy choose."
+          },
+          "executor_id": {
+            "type": "string",
+            "description": "Required when kind=executor. The registered backend that will serve the call."
+          },
+          "fallback_executor_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ExecutorDescriptor": {
+        "type": "object",
+        "required": [
+          "executor_id"
+        ],
+        "properties": {
+          "executor_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "supports_batch": {
+            "type": "boolean"
+          },
+          "supports_cache_prefix": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "degraded",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "CachePrefixCreateRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "content",
+          "ttl_seconds"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "description": "The stable leading context to cache."
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "description": "Lifetime of the cached prefix. Consumers commonly need both long-lived (order of an hour) and short-lived (order of minutes) prefixes."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user"
+            ],
+            "default": "system",
+            "description": "Where the prefix is placed in the rendered call."
+          }
+        }
+      },
+      "CachePrefix": {
+        "type": "object",
+        "required": [
+          "cache_prefix_id",
+          "ttl_seconds",
+          "token_count"
+        ],
+        "properties": {
+          "cache_prefix_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ttl_seconds": {
+            "type": "integer"
+          },
+          "token_count": {
+            "type": "integer"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user"
+            ]
+          },
+          "hit_count": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RepairPolicy": {
+        "type": "object",
+        "properties": {
+          "max_attempts": {
+            "type": "integer",
+            "default": 0
+          },
+          "repair_template_id": {
+            "type": "string"
+          },
+          "preserve_valid_sections": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "LaborCallRequest": {
+        "type": "object",
+        "required": [
+          "envelope",
+          "execution_target",
+          "output_schema",
+          "idempotency_key",
+          "labor_template_id",
+          "data_template_ref",
+          "output_du_class",
+          "raw_output_persistence_policy",
+          "parsed_output_persistence_policy",
+          "output_parse_mode",
+          "json_schema_strict",
+          "allow_partial_json_repair",
+          "max_parse_attempts",
+          "on_parse_failure"
+        ],
+        "properties": {
+          "envelope": {
+            "$ref": "#/components/schemas/RequestEnvelope"
+          },
+          "labor_call_id": {
+            "type": "string",
+            "description": "Optional client-supplied id; the server generates one if omitted."
+          },
+          "stage": {
+            "type": "string",
+            "description": "OPAQUE consumer label for this step. Stored and echoed in lineage; the platform attaches NO behavior to its value."
+          },
+          "output_type": {
+            "type": "string",
+            "description": "Opaque consumer-assigned type name for the output artifact."
+          },
+          "execution_target": {
+            "$ref": "#/components/schemas/ExecutionTarget"
+          },
+          "input_data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "input_schema_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "output_schema": {
+            "description": "Inline JSON Schema OR an ArtifactRef to a stored schema.",
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              }
+            ]
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "Optional explicit messages; alternative to template rendering."
+          },
+          "cache_prefix_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "ORDERED list of cache prefixes prepended to the call (large stable layer first, smaller per-context layer next)."
+          },
+          "inference_parameters": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "structured_output_required": {
+            "type": "boolean",
+            "default": true
+          },
+          "validation_required": {
+            "type": "boolean",
+            "default": false
+          },
+          "validation_schema_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "repair_policy": {
+            "$ref": "#/components/schemas/RepairPolicy"
+          },
+          "executor_policy_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high"
+            ]
+          },
+          "deadline_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "callback_url": {
+            "type": "string"
+          },
+          "persist_raw_output": {
+            "type": "boolean",
+            "default": true
+          },
+          "persist_parsed_output": {
+            "type": "boolean",
+            "default": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "labor_template_id": {
+            "type": "string",
+            "description": "Which labor template is being executed."
+          },
+          "data_template_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "prompt_template_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "prompt_chain_id": {
+            "type": "string"
+          },
+          "prompt_step_id": {
+            "type": "string"
+          },
+          "parent_labor_call_id": {
+            "type": "string",
+            "description": "Re-entrancy: the call that produced an input to this one."
+          },
+          "upstream_artifact_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "downstream_expected_artifact_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "output_du_class": {
+            "type": "string",
+            "description": "Consumer-assigned class of the generated output unit. Opaque to the platform."
+          },
+          "raw_output_persistence_policy": {
+            "type": "string",
+            "enum": [
+              "immutable",
+              "discard",
+              "encrypted"
+            ]
+          },
+          "parsed_output_persistence_policy": {
+            "type": "string",
+            "enum": [
+              "persist",
+              "discard"
+            ]
+          },
+          "output_parse_mode": {
+            "type": "string",
+            "enum": [
+              "json",
+              "text",
+              "markdown",
+              "dita_topic_xml",
+              "dita_map_xml",
+              "mixed"
+            ]
+          },
+          "json_schema_strict": {
+            "type": "boolean",
+            "default": true
+          },
+          "allow_partial_json_repair": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_parse_attempts": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_parse_failure": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "repair",
+              "mark_candidate",
+              "hold_for_review"
+            ],
+            "default": "fail"
+          },
+          "model_policy_id": {
+            "type": "string",
+            "description": "Governs which models are allowed for this call's data class / tenant / cost / privacy boundary."
+          },
+          "data_classification": {
+            "type": "string",
+            "description": "Optional explicit override; otherwise inherited from envelope.data_classification."
+          },
+          "retention_policy_id": {
+            "type": "string"
+          },
+          "cost_center_id": {
+            "type": "string",
+            "description": "Optional override; otherwise inherited from envelope.cost_center_id."
+          }
+        }
+      },
+      "LaborCallResponse": {
+        "type": "object",
+        "required": [
+          "labor_call_id",
+          "status"
+        ],
+        "properties": {
+          "labor_call_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "stage": {
+            "type": "string",
+            "description": "Echoed verbatim from the request."
+          },
+          "raw_output_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "parsed_output_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "validation_result_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "repair_result_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "output_artifact_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "cost": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "rate_class": {
+                "type": "string",
+                "enum": [
+                  "sync",
+                  "batch"
+                ]
+              }
+            }
+          },
+          "executor_used": {
+            "type": "string",
+            "description": "The executor_id that actually served the call."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "trace_context": {
+            "type": "object"
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          }
+        }
+      },
+      "LaborBatchRequest": {
+        "type": "object",
+        "required": [
+          "envelope",
+          "items",
+          "idempotency_key"
+        ],
+        "properties": {
+          "envelope": {
+            "$ref": "#/components/schemas/RequestEnvelope"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LaborBatchItem"
+            }
+          },
+          "concurrency_limit": {
+            "type": "integer"
+          },
+          "failure_policy": {
+            "type": "string",
+            "enum": [
+              "fail_fast",
+              "continue_on_error",
+              "retry_failed",
+              "repair_failed",
+              "hold_for_review"
+            ],
+            "default": "continue_on_error"
+          },
+          "executor_policy_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "callback_url": {
+            "type": "string"
+          }
+        }
+      },
+      "LaborBatchItem": {
+        "type": "object",
+        "required": [
+          "custom_id",
+          "call"
+        ],
+        "properties": {
+          "custom_id": {
+            "type": "string",
+            "description": "Consumer-supplied correlation id. Returned VERBATIM on every result for this item."
+          },
+          "call": {
+            "$ref": "#/components/schemas/LaborCallRequest"
+          }
+        }
+      },
+      "LaborBatchResponse": {
+        "type": "object",
+        "required": [
+          "batch_id",
+          "status"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "submitted_count": {
+            "type": "integer"
+          },
+          "counts_by_state": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "cost_so_far": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              }
+            }
+          },
+          "events_url": {
+            "type": "string"
+          },
+          "items_url": {
+            "type": "string"
+          },
+          "cancel_url": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LaborBatchItemResult": {
+        "type": "object",
+        "required": [
+          "custom_id",
+          "status"
+        ],
+        "properties": {
+          "custom_id": {
+            "type": "string"
+          },
+          "labor_call_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "result": {
+            "$ref": "#/components/schemas/LaborCallResponse"
+          }
+        }
+      },
+      "LaborJobUxState": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "progress_percent": {
+            "type": "number"
+          },
+          "current_step": {
+            "type": "string"
+          },
+          "executor_used": {
+            "type": "string"
+          },
+          "tokens_input": {
+            "type": "integer"
+          },
+          "tokens_output": {
+            "type": "integer"
+          },
+          "cost_so_far": {
+            "type": "number"
+          },
+          "estimated_remaining_cost": {
+            "type": "number"
+          },
+          "partial_output_preview": {
+            "type": "string"
+          },
+          "validation_status": {
+            "type": "string"
+          },
+          "repair_attempt_count": {
+            "type": "integer"
+          },
+          "can_cancel": {
+            "type": "boolean"
+          },
+          "can_retry": {
+            "type": "boolean"
+          },
+          "can_fork": {
+            "type": "boolean"
+          },
+          "can_approve": {
+            "type": "boolean"
+          }
+        }
+      },
+      "JobEvent": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type",
+          "tenant_id",
+          "job_id",
+          "occurred_at",
+          "trace_id",
+          "event_sequence"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "labor_call_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "progress_percent": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "artifact_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "event_sequence": {
+            "type": "integer"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "causation_id": {
+            "type": "string"
+          },
+          "parent_event_id": {
+            "type": "string"
+          },
+          "replayable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ValidationRequest": {
+        "type": "object",
+        "required": [
+          "validation_schema_ref",
+          "parsed_output_ref"
+        ],
+        "properties": {
+          "validation_schema_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "parsed_output_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "validation_policy": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "ValidationResult": {
+        "type": "object",
+        "required": [
+          "validation_result_id",
+          "status"
+        ],
+        "properties": {
+          "validation_result_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          },
+          "repair_required": {
+            "type": "boolean"
+          },
+          "validation_result_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          }
+        }
+      },
+      "ValidationError": {
+        "type": "object",
+        "required": [
+          "path",
+          "rule_id",
+          "severity"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "JSON Pointer into the parsed output."
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning",
+              "info"
+            ]
+          },
+          "observed": {},
+          "expected": {},
+          "repair_hint": {
+            "type": "string"
+          }
+        }
+      },
+      "RepairRequest": {
+        "type": "object",
+        "required": [
+          "validation_result_ref"
+        ],
+        "properties": {
+          "validation_result_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "repair_template_id": {
+            "type": "string"
+          },
+          "preserve_valid_sections": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "ExecutorPolicy": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "allowed_executors"
+        ],
+        "properties": {
+          "executor_policy_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "allowed_executors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blocked_executors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "classification_rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "data_classification": {
+                  "type": "string"
+                },
+                "allowed_executors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "description": "Constrains which executors may serve a call of a given classification."
+          },
+          "max_cost_per_call": {
+            "type": "number"
+          },
+          "budget": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "tenant",
+                  "project",
+                  "cost_center"
+                ]
+              },
+              "limit": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "enforcement": {
+                "type": "string",
+                "enum": [
+                  "reserve_then_run",
+                  "hard_stop_on_exhaustion"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "LaborJob": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "tenant_id",
+          "status",
+          "created_at",
+          "trace_context"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "labor_call_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "stage": {
+            "type": "string",
+            "description": "Opaque consumer label, echoed."
+          },
+          "executor_used": {
+            "type": "string"
+          },
+          "progress_percent": {
+            "type": "number"
+          },
+          "input_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "output_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "validation_result_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "repair_result_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cancelled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failure_reason": {
+            "type": "string"
+          },
+          "trace_context": {
+            "type": "object"
+          }
+        }
+      },
+      "JobCancelRequest": {
+        "type": "object",
+        "required": [
+          "reason",
+          "preserve_partial_outputs",
+          "cancel_downstream"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "preserve_partial_outputs": {
+            "type": "boolean"
+          },
+          "cancel_downstream": {
+            "type": "boolean"
+          }
+        }
+      },
+      "JobRetryRequest": {
+        "type": "object",
+        "required": [
+          "retry_scope",
+          "preserve_successful_steps",
+          "reason"
+        ],
+        "properties": {
+          "retry_scope": {
+            "type": "string",
+            "enum": [
+              "whole_job",
+              "failed_steps_only",
+              "from_step",
+              "selected_steps"
+            ]
+          },
+          "from_step_id": {
+            "type": "string"
+          },
+          "selected_step_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preserve_successful_steps": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "JobForkRequest": {
+        "type": "object",
+        "required": [
+          "fork_name",
+          "reason"
+        ],
+        "properties": {
+          "fork_name": {
+            "type": "string"
+          },
+          "override_input_data": {
+            "type": "object"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "LineageEdge": {
+        "type": "object",
+        "required": [
+          "lineage_edge_id",
+          "from_artifact_ref",
+          "to_artifact_ref",
+          "edge_type"
+        ],
+        "properties": {
+          "lineage_edge_id": {
+            "type": "string"
+          },
+          "from_artifact_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "to_artifact_ref": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "edge_type": {
+            "type": "string",
+            "enum": [
+              "used_template",
+              "used_prompt",
+              "used_input_data",
+              "used_context",
+              "generated_output",
+              "parsed_from",
+              "validated_by",
+              "repaired_by",
+              "rendered_as",
+              "persisted_as",
+              "approved_by",
+              "published_as",
+              "forked_from",
+              "rolled_back_to",
+              "supersedes",
+              "references"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "labor_call_id": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error_code",
+          "message"
+        ],
+        "properties": {
+          "error_code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "validation_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelPolicy": {
+        "type": "object",
+        "required": [
+          "model_policy_id",
+          "tenant_id"
+        ],
+        "properties": {
+          "model_policy_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "allowed_providers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blocked_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "external_model_allowed": {
+            "type": "boolean"
+          },
+          "local_model_required_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Data classes that MUST stay on a local model."
+          },
+          "validation_required_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "human_approval_required_for": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_tokens": {
+            "type": "integer"
+          },
+          "max_cost_per_call": {
+            "type": "number"
+          },
+          "data_class_rules": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Per data-classification model constraints."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ name }}
+  namespace: {{ namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ name }}
+  template:
+    metadata:
+      labels:
+        app: {{ name }}
+    spec:
+      containers:
+      - name: {{ name }}
+        image: {{ image }}
+        ports:
+        - containerPort: {{ container_port }}
+        env:
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-secret
+              key: token
+        resources:
+          requests:
+            cpu: "{{ cpu_request }}"
+            memory: "{{ memory_request }}"
+            {% if gpu_request and gpu_request != "0" %}
+            nvidia.com/gpu: "{{ gpu_request }}"
+            {% endif %}
+          limits:
+            cpu: "{{ cpu_limit }}"
+            memory: "{{ memory_limit }}"
+            {% if gpu_limit and gpu_limit != "0" %}
+            nvidia.com/gpu: "{{ gpu_limit }}"
+            {% endif %}
