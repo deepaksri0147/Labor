@@ -105,7 +105,7 @@ async def repair_output(
     session: AsyncSession = Depends(get_session),
 ) -> LaborCallResponse:
     job = (await session.execute(
-        select(orm.LaborJob).where(orm.LaborJob.labor_call_id == labor_call_id)
+        select(orm.LaborJob).options(selectinload(orm.LaborJob.artifacts)).where(orm.LaborJob.labor_call_id == labor_call_id)
     )).scalar_one_or_none()
     if not job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "labor call not found")
@@ -163,6 +163,8 @@ def _job_to_call_response(job: orm.LaborJob) -> LaborCallResponse:
         raw_output_ref=_to_schema_ref(raw_ref),
         parsed_output_ref=_to_schema_ref(parsed_ref),
         validation_result_ref=_to_schema_ref(val_ref),
+        error=job.failure_reason,
+        trace_context=job.trace_context if job.trace_context else None,
     )
 
 

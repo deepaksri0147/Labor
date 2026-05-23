@@ -213,4 +213,4 @@ async def get_model_policy(model_policy_id: str, principal: Principal = Depends(
     if not row:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "model policy not found")
     enforce_tenant(principal, row.tenant_id)
-    return ModelPolicy(**row.spec)
+    return ModelPolicy(**row.spec).model_copy(update={"model_policy_id": row.model_policy_id})
