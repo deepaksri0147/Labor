@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                  id="labor_pipeline_defs" targetNamespace="http://mobius/labor">
+  <bpmn:process id="labor_pipeline" name="Labor Pipeline" isExecutable="true">
+    <bpmn:startEvent id="start"/>
+    <!-- COARSE: the whole labor job is ONE external task on topic labor.execute -->
+    <bpmn:serviceTask id="labor_execute" name="Run labor job"
+                      camunda:type="external" camunda:topic="labor.execute"/>
+    <bpmn:exclusiveGateway id="gw_outcome" name="succeeded?"/>
+    <!-- optional human-in-the-loop branch only on failure; coarse path skips this -->
+    <bpmn:userTask id="human_review" name="Human review (optional)"/>
+    <bpmn:serviceTask id="labor_repair" name="Repair (optional)"
+                      camunda:type="external" camunda:topic="labor.repair"/>
+    <bpmn:endEvent id="done"/>
+    <bpmn:endEvent id="failed"/>
+
+    <bpmn:sequenceFlow sourceRef="start" targetRef="labor_execute"/>
+    <bpmn:sequenceFlow sourceRef="labor_execute" targetRef="gw_outcome"/>
+    <bpmn:sequenceFlow id="f_ok" sourceRef="gw_outcome" targetRef="done">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">${succeeded == true}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_review" sourceRef="gw_outcome" targetRef="human_review">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">${succeeded == false}</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow sourceRef="human_review" targetRef="labor_repair"/>
+    <bpmn:sequenceFlow sourceRef="labor_repair" targetRef="done"/>
+  </bpmn:process>
+</bpmn:definitions>

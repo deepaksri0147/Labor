@@ -1,0 +1,22 @@
+name: Mobius Caller Workflow 
+
+on:
+  push:
+    branches: [ release ]
+jobs:
+  prod_job:
+    if: github.ref == 'refs/heads/release'
+    uses: gaiangroup/access/.github/workflows/python-mobius-graph-operations-release.yaml@dev
+    with:
+      SERVICE_CODE: mobius-labour-unit
+    secrets: inherit
+
+  unauthorized_branch_job:
+    if: github.ref != 'refs/heads/release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: This is not an authorized branch.
+        run: echo "This is not an authorized branch."
+
+        
+        

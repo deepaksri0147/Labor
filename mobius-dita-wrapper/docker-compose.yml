@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dita
+      POSTGRES_PASSWORD: dita
+      POSTGRES_DB: dita_wrapper_service
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dita"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:7
+    ports: ["6380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    build: { context: ., target: api }
+    command: alembic upgrade head
+    environment:
+      DITA_DATABASE_URL: postgresql+psycopg://dita:dita@postgres:5432/dita_wrapper_service
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    build: { context: ., target: api }
+    environment:
+      DITA_DATABASE_URL: postgresql+psycopg://dita:dita@postgres:5432/dita_wrapper_service
+      DITA_REDIS_URL: redis://redis:6379/1
+      DITA_RENDER_BASE_URL: http://dita-render:8080
+      DITA_LABOR_GATEWAY_BASE_URL: http://labor-gateway:8000
+      DITA_BOB_BASE_URL: http://bob-service:8080
+    ports: ["8001:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+  worker:
+    build: { context: ., target: worker }
+    environment:
+      DITA_DATABASE_URL: postgresql+psycopg://dita:dita@postgres:5432/dita_wrapper_service
+      DITA_REDIS_URL: redis://redis:6379/1
+      DITA_RENDER_BASE_URL: http://dita-render:8080
+      DITA_LABOR_GATEWAY_BASE_URL: http://labor-gateway:8000
+      DITA_BOB_BASE_URL: http://bob-service:8080
+    deploy: { replicas: 2 }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+  camunda-worker:
+    build: { context: ., target: worker }
+    command: python -m app.worker.camunda_worker
+    environment:
+      DITA_DATABASE_URL: postgresql+psycopg://dita:dita@postgres:5432/dita_wrapper_service
+      DITA_REDIS_URL: redis://redis:6379/1
+      DITA_RENDER_BASE_URL: http://dita-render:8080
+      DITA_LABOR_GATEWAY_BASE_URL: http://labor-gateway:8000
+      DITA_BOB_BASE_URL: http://bob-service:8080
+    deploy: { replicas: 2 }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
