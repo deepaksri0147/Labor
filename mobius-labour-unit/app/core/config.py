@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     inference_token: str | None = None
     inference_timeout_seconds: float = 120.0
 
+    # Data wrapper service (the external CRUD API for ingest/retrieve/update).
+    # The wrapper is called with the bearer token forwarded from the inbound request;
+    # there is no server-side default token.
+    wrapper_base_url: str = "http://0.0.0.0:8002"
+    wrapper_timeout_seconds: float = 30.0
+
     # Bob-Service / Bob-Camunda (workflow engine integration)
     bob_base_url: str = "http://bob-service:8080"
     bob_timeout_seconds: float = 30.0

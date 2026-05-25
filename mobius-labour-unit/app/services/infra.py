@@ -68,16 +68,25 @@ async def resolve_prefixes(cache_prefix_ids: list[str]) -> list[str]:
 
 
 # ---- job queue ------------------------------------------------------------
-async def enqueue_job(job_id: str) -> None:
-    await get_redis().rpush(_settings.queue_name, job_id)
+# The queue carries a JSON envelope so the worker can re-apply the originating
+# request's bearer token when it calls the wrapper service.
+async def enqueue_job(job_id: str, token: str | None = None) -> None:
+    envelope = json.dumps({"job_id": job_id, "token": token})
+    await get_redis().rpush(_settings.queue_name, envelope)
 
 
-async def dequeue_job(timeout: int = 5) -> str | None:
+async def dequeue_job(timeout: int = 5) -> tuple[str, str | None] | None:
+    """Returns (job_id, token) or None on timeout."""
     res = await get_redis().blpop([_settings.queue_name], timeout=timeout)
     if res is None:
         return None
-    _, job_id = res
-    return job_id
+    _, raw = res
+    try:
+        env = json.loads(raw)
+        return env["job_id"], env.get("token")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        # Back-compat: a plain job_id string left over from before the envelope.
+        return raw, None
 
 
 # ---- event stream ---------------------------------------------------------
