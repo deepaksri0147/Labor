@@ -5,8 +5,9 @@ it verifies the JWT against the configured JWKS and extracts tenant scope. For l
 runs (auth_disabled=True) it accepts a dev token and a tenant header.
 
 The raw bearer token from the inbound request is also stashed on a wrapper_api ContextVar
-so every downstream wrapper call (ingest / retrieve / update) sends the SAME token to
-the data wrapper service. There is no server-side default token.
+so every downstream wrapper call (ingest / retrieve / update) can send the same token to
+the data wrapper service. When local auth is disabled and no inbound token exists, the
+wrapper client can use its own configured fallback token.
 """
 from __future__ import annotations
 

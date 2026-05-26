@@ -12,11 +12,11 @@ row count, HTTP status, and latency for traceability.
 
 Bearer-token propagation
 ------------------------
-The wrapper is called with the bearer token forwarded from the inbound HTTP request.
-The token is stored in a `ContextVar` that is set per-request (by the auth dependency
-in app.core.auth) and per-worker-job (by app.worker.main after it dequeues). There is
-NO server-side default token: if the contextvar is empty, no Authorization header is
-sent and the wrapper will reject the call.
+The wrapper is called with the bearer token forwarded from the inbound HTTP request
+when one is present. The token is stored in a `ContextVar` that is set per-request
+(by the auth dependency in app.core.auth) and per-worker-job (by app.worker.main
+after it dequeues). For local/dev runs where the primary API has auth disabled, a
+configured wrapper fallback token is used so wrapper calls still send Authorization.
 
 Also exposes small helpers — `orm_to_dict`, `as_rows`, `retrieve_one` — that callers use
 to bridge SQLAlchemy ORM instances and wrapper responses without writing serialization
@@ -125,9 +125,31 @@ def first_row(resp: Any) -> dict | None:
 
 
 # ---- HTTP plumbing --------------------------------------------------------
+def _clean_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    token = token.strip().strip("\"'")
+    if not token or (token.startswith("${") and token.endswith("}")):
+        return None
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token or None
+
+
+def _auth_token() -> str | None:
+    # Prefer user/inbound identity. Fall back to a wrapper-specific service token
+    # for local auth-disabled runs. The inference token fallback preserves existing
+    # local env files that only had one platform bearer token configured.
+    return (
+        _clean_token(_current_token.get())
+        or _clean_token(_settings.wrapper_token)
+        or _clean_token(_settings.inference_token)
+    )
+
+
 def _headers() -> dict[str, str]:
     h = {"accept": "application/json", "Content-Type": "application/json"}
-    token = _current_token.get()
+    token = _auth_token()
     if token:
         h["Authorization"] = f"Bearer {token}"
     return h
@@ -167,7 +189,7 @@ async def _request(method: str, path: str, *, params: dict, body: Any) -> Any:
     op = _operation(method, path)
     full_url = f"{url}?{param_key}={schema_name}"
 
-    token = _current_token.get()
+    token = _auth_token()
     auth_tag = "Bearer <present>" if token else "<absent>"
     log.info("=" * 80)
     log.info("[%s] -> %s %s", op, method, full_url)
