@@ -8,13 +8,10 @@ whichever the BPMN is authored for. Both run the same in-process orchestrator.
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Principal, current_principal, enforce_tenant
-from app.db.session import get_session
-from app.models import orm
 from app.schemas.labor import LaborCallRequest
-from app.services import infra
+from app.services import wrapper_api, infra
 from app.services.bob_camunda import BobCamundaClient, map_process_state_to_jobstate
 from app.services.camunda_bridge import create_job_from_request, run_to_terminal
 
@@ -45,7 +42,7 @@ async def run_labor_async(
     /labor/jobs/{id} or subscribes to events for completion."""
     enforce_tenant(principal, req.envelope.tenant_id)
     job_id = await create_job_from_request(req)
-    await infra.enqueue_job(job_id)
+    await infra.enqueue_job(job_id, token=wrapper_api.get_token())
     return {"job_id": job_id, "status": "queued"}
 
 
@@ -67,7 +64,6 @@ async def reconcile_status(
     job_id: str,
     pipeline_id: str,
     principal: Principal = Depends(current_principal),
-    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Reconcile the gateway's job status against Bob's process status.
 
@@ -75,20 +71,20 @@ async def reconcile_status(
     gateway's labor_job.status is the source of truth for the inner labor RUN. This
     surfaces both and projects Bob's state onto our vocabulary when it is more advanced
     (e.g. the workflow was cancelled at the engine level)."""
-    job = await session.get(orm.LaborJob, job_id)
+    job = await wrapper_api.retrieve_one(wrapper_api.LABOR_JOB, {"job_id": job_id})
     if not job:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
-    enforce_tenant(principal, job.tenant_id)
+    enforce_tenant(principal, job["tenant_id"])
     client = BobCamundaClient()
     try:
         process = await client.pipeline_status(pipeline_id)
     except Exception as e:  # Bob unreachable -> report gateway-local view only
-        return {"job_id": job_id, "gateway_status": job.status, "process_status": None,
+        return {"job_id": job_id, "gateway_status": job["status"], "process_status": None,
                 "note": f"bob status unavailable: {e}"}
     projected = map_process_state_to_jobstate(process)
     return {
         "job_id": job_id,
-        "gateway_status": job.status,
+        "gateway_status": job["status"],
         "process_status": process.get("state") or process.get("status"),
         "projected_jobstate": projected,
     }

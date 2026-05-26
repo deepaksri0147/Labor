@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     inference_token: str | None = None
     inference_timeout_seconds: float = 120.0
 
+    # Data wrapper service (the external CRUD API for ingest/retrieve/update).
+    # Inbound bearer tokens are forwarded when present. For local/dev runs where
+    # auth_disabled lets the primary API accept unauthenticated requests, this token
+    # is used for wrapper calls.
+    wrapper_base_url: str = "https://ig.gov-cloud.ai/mobius-pi-wrapper-service"
+    wrapper_timeout_seconds: float = 30.0
+    wrapper_token: str | None = None
+
     # Bob-Service / Bob-Camunda (workflow engine integration)
     bob_base_url: str = "http://bob-service:8080"
     bob_timeout_seconds: float = 30.0

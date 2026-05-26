@@ -3,6 +3,11 @@
 Every added endpoint declares HTTPBearer security; this dependency enforces it. In prod
 it verifies the JWT against the configured JWKS and extracts tenant scope. For local/test
 runs (auth_disabled=True) it accepts a dev token and a tenant header.
+
+The raw bearer token from the inbound request is also stashed on a wrapper_api ContextVar
+so every downstream wrapper call (ingest / retrieve / update) can send the same token to
+the data wrapper service. When local auth is disabled and no inbound token exists, the
+wrapper client can use its own configured fallback token.
 """
 from __future__ import annotations
 
@@ -12,6 +17,7 @@ from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import get_settings
+from app.services import wrapper_api
 
 _settings = get_settings()
 _bearer = HTTPBearer(auto_error=not _settings.auth_disabled)
@@ -22,15 +28,21 @@ class Principal:
     subject: str
     tenant_id: str
     scopes: tuple[str, ...] = ()
+    token: str | None = None
 
 
 async def current_principal(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     x_tenant_id: str | None = Header(default=None),
 ) -> Principal:
+    # Forward the inbound bearer token verbatim to the wrapper service for every
+    # subsequent ingest/retrieve/update made in this request.
+    raw_token = creds.credentials if (creds and creds.credentials) else None
+    wrapper_api.set_token(raw_token)
+
     if _settings.auth_disabled:
         # dev/test path: trust the tenant header, synthesize a principal
-        return Principal(subject="dev", tenant_id=x_tenant_id or "dev-tenant")
+        return Principal(subject="dev", tenant_id=x_tenant_id or "dev-tenant", token=raw_token)
 
     if creds is None or not creds.credentials:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
@@ -43,6 +55,7 @@ async def current_principal(
         subject=claims.get("sub", ""),
         tenant_id=tenant,
         scopes=tuple(claims.get("scope", "").split()),
+        token=raw_token,
     )
 
 
@@ -66,6 +79,12 @@ def _verify_jwt(token: str) -> dict:
 
 
 def enforce_tenant(principal: Principal, envelope_tenant: str) -> None:
-    """Reject cross-tenant access: the envelope tenant must match the token tenant."""
+    """Reject cross-tenant access: the envelope tenant must match the token tenant.
+
+    Skipped entirely when GATEWAY_AUTH_DISABLED=true (local/test runs) — without a
+    verified JWT there is no authoritative tenant to compare against.
+    """
+    if _settings.auth_disabled:
+        return
     if principal.tenant_id != envelope_tenant:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "tenant mismatch between token and request")
